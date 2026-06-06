@@ -1,0 +1,12 @@
+{
+  "collaborators": [
+    {
+      "name": "Emerson Manabu Araki",
+      "social_links": [
+        "https://www.linkedin.com/in/emerson-manabu-araki/",
+        "https://github.com/EmersonAraki"
+      ]
+    }
+  ],
+  "stack": ["go", "redis", "nginx"]
+}

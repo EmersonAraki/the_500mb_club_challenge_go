@@ -1,0 +1,80 @@
+# Pi-Bench telemetry stack (implementation branch): pulls the published image.
+#
+# Security-hardened to satisfy the PR Security Gate, set explicitly rather than
+# relying on the gate's auto-injection so the validated compose matches what we
+# tested: read-only rootfs, dropped caps, no-new-privileges, non-root APIs.
+#
+# Resource limits sum within the inviolable aggregate ceiling of 2 CPU / 500 MB:
+#   redis   0.30 CPU /  96 MB
+#   nginx   0.35 CPU /  32 MB
+#   api x3  0.45 CPU / 120 MB each  (1.35 CPU / 360 MB)
+#   total   2.00 CPU / 488 MB
+
+x-api: &api
+  image: ghcr.io/emersonaraki/500mb-club-challenge:1.0.0
+  environment:
+    REDIS_ADDR: redis:6379
+    DEVICE_CAP: "1024"
+    GOMEMLIMIT: 110MiB
+  user: "65534:65534"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp
+  depends_on: [redis]
+  deploy:
+    resources:
+      limits:
+        cpus: "0.45"
+        memory: 120M
+  restart: unless-stopped
+
+services:
+  redis:
+    image: redis:7-alpine
+    # Exec-form command (list) so it can never be read as shell form.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "80mb", "--maxmemory-policy", "allkeys-lru"]
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.30"
+          memory: 96M
+    restart: unless-stopped
+
+  api1:
+    <<: *api
+    hostname: api1
+
+  api2:
+    <<: *api
+    hostname: api2
+
+  api3:
+    <<: *api
+    hostname: api3
+
+  lb:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+    ports:
+      - "8080:8080"
+    depends_on: [api1, api2, api3]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.35"
+          memory: 32M
+    restart: unless-stopped
