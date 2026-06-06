@@ -1,0 +1,72 @@
+# Pi-Bench telemetry stack: load balancer + 3 API instances + Redis.
+#
+# Resource limits sum within the inviolable aggregate ceiling of 2 CPU / 500 MB.
+# The split favors capacity: all traffic funnels through the single nginx, so it
+# gets more cores; Redis (100k+ ops/s per core) is far from saturated at these
+# rates, so it gives some up; the 3 API instances keep the largest share.
+#   redis   0.30 CPU /  96 MB
+#   nginx   0.35 CPU /  32 MB
+#   api x3  0.45 CPU / 120 MB each  (1.35 CPU / 360 MB)
+#   total   2.00 CPU / 488 MB
+services:
+  redis:
+    image: redis:7-alpine
+    # No persistence (RDB/AOF off); cap memory with an LRU safety net on top of
+    # the per-device history cap enforced by the API.
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxmemory 80mb
+      --maxmemory-policy allkeys-lru
+    deploy:
+      resources:
+        limits:
+          cpus: "0.30"
+          memory: 96M
+    restart: unless-stopped
+
+  api1:
+    build: .
+    hostname: api1
+    environment: &api-env
+      REDIS_ADDR: redis:6379
+      DEVICE_CAP: "1024"
+      GOMEMLIMIT: 110MiB
+    depends_on: [redis]
+    deploy: &api-deploy
+      resources:
+        limits:
+          cpus: "0.45"
+          memory: 120M
+    restart: unless-stopped
+
+  api2:
+    build: .
+    hostname: api2
+    environment: *api-env
+    depends_on: [redis]
+    deploy: *api-deploy
+    restart: unless-stopped
+
+  api3:
+    build: .
+    hostname: api3
+    environment: *api-env
+    depends_on: [redis]
+    deploy: *api-deploy
+    restart: unless-stopped
+
+  lb:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8080:8080"
+    depends_on: [api1, api2, api3]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.35"
+          memory: 32M
+    restart: unless-stopped

@@ -1,0 +1,12 @@
+# Build output
+/bin/
+/api
+*.test
+
+# Local caches (sandbox points GOCACHE/GOMODCACHE here)
+/.gocache/
+
+# Challenge spec docs (provided inputs, not part of the implementation artifact)
+/api.md
+/openapi.yaml
+/scoring.md
