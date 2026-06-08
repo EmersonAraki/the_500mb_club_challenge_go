@@ -24,6 +24,12 @@ x-api: &api
   tmpfs:
     - /tmp
   depends_on: [redis]
+  # Top-level cpus/mem_limit mirror the deploy block so the aggregate budget is
+  # enforced by `docker compose up` on any Compose version (deploy.resources was
+  # historically swarm-only). The validator reads the top-level form with
+  # precedence over deploy.resources, so this does not double-count.
+  cpus: "0.45"
+  mem_limit: 120M
   deploy:
     resources:
       limits:
@@ -39,6 +45,8 @@ services:
     read_only: true
     security_opt:
       - no-new-privileges:true
+    cpus: "0.30"
+    mem_limit: 96M
     deploy:
       resources:
         limits:
@@ -72,6 +80,8 @@ services:
     ports:
       - "8080:8080"
     depends_on: [api1, api2, api3]
+    cpus: "0.35"
+    mem_limit: 32M
     deploy:
       resources:
         limits:
