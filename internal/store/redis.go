@@ -115,6 +115,40 @@ func (cn *conn) roundtrip(cmds [][][]byte) ([]any, error) {
 	return replies, nil
 }
 
+// Warm eagerly establishes cap(pool) connections so the request path never pays
+// a TCP handshake on a pool miss. Each connection is verified with PING, so Warm
+// doubles as a readiness probe: it returns an error until Redis is reachable,
+// letting the caller retry. On failure the partially filled pool is left intact
+// for reuse; already-pooled connections are not discarded.
+func (s *redisStore) Warm(ctx context.Context) error {
+	for i := 0; i < cap(s.pool); i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		cn, err := s.dial()
+		if err != nil {
+			return err
+		}
+		if dl, ok := ctx.Deadline(); ok {
+			_ = cn.c.SetDeadline(dl)
+		}
+		replies, err := cn.roundtrip([][][]byte{{[]byte("PING")}})
+		if err != nil {
+			_ = cn.c.Close()
+			return err
+		}
+		_ = cn.c.SetDeadline(time.Time{})
+		if str, ok := replies[0].(string); !ok || str != "PONG" {
+			_ = cn.c.Close()
+			return errors.New("redis: unexpected PING reply during warm")
+		}
+		s.put(cn)
+	}
+	return nil
+}
+
 func (s *redisStore) key(id string) []byte { return []byte("t:" + id) }
 
 func (s *redisStore) Ping(ctx context.Context) error {

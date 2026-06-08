@@ -39,6 +39,9 @@ services:
       REDIS_ADDR: redis:6379
       DEVICE_CAP: "1024"
       GOMEMLIMIT: 110MiB
+      # Pin to the ~0.45-core share: one P avoids the goroutine migration and
+      # GC-assist jitter of an oversubscribed runtime under a sub-core quota.
+      GOMAXPROCS: "1"
     depends_on: [redis]
     cpus: &api-cpus "0.45"
     mem_limit: &api-mem 120M

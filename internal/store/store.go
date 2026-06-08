@@ -22,3 +22,11 @@ type Store interface {
 	// Close releases backend resources.
 	Close() error
 }
+
+// Warmer is an optional Store capability: eagerly establishing backend
+// connections at startup so request-path latency excludes connection setup.
+// Backends that need no warm-up (e.g. the in-memory store) simply do not
+// implement it; callers type-assert and skip when absent.
+type Warmer interface {
+	Warm(ctx context.Context) error
+}
