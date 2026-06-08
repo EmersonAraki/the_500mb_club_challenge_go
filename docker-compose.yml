@@ -16,6 +16,9 @@ x-api: &api
     REDIS_ADDR: redis:6379
     DEVICE_CAP: "1024"
     GOMEMLIMIT: 110MiB
+    # Pin to the ~0.45-core share: one P avoids the goroutine migration and
+    # GC-assist jitter of an oversubscribed runtime under a sub-core quota.
+    GOMAXPROCS: "1"
   user: "65534:65534"
   read_only: true
   cap_drop: [ALL]
