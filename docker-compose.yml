@@ -19,6 +19,12 @@ services:
       --appendonly no
       --maxmemory 80mb
       --maxmemory-policy allkeys-lru
+    # Top-level cpus/mem_limit mirror the deploy block so the aggregate budget is
+    # enforced by `docker compose up` on any Compose version (deploy.resources
+    # was historically swarm-only). The validator reads the top-level form with
+    # precedence over deploy.resources, so this does not double-count.
+    cpus: "0.30"
+    mem_limit: 96M
     deploy:
       resources:
         limits:
@@ -34,6 +40,8 @@ services:
       DEVICE_CAP: "1024"
       GOMEMLIMIT: 110MiB
     depends_on: [redis]
+    cpus: &api-cpus "0.45"
+    mem_limit: &api-mem 120M
     deploy: &api-deploy
       resources:
         limits:
@@ -46,6 +54,8 @@ services:
     hostname: api2
     environment: *api-env
     depends_on: [redis]
+    cpus: *api-cpus
+    mem_limit: *api-mem
     deploy: *api-deploy
     restart: unless-stopped
 
@@ -54,6 +64,8 @@ services:
     hostname: api3
     environment: *api-env
     depends_on: [redis]
+    cpus: *api-cpus
+    mem_limit: *api-mem
     deploy: *api-deploy
     restart: unless-stopped
 
@@ -64,6 +76,8 @@ services:
     ports:
       - "8080:8080"
     depends_on: [api1, api2, api3]
+    cpus: "0.35"
+    mem_limit: 32M
     deploy:
       resources:
         limits:
