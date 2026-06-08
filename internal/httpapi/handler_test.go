@@ -39,6 +39,10 @@ func TestHealthz(t *testing.T) {
 	if w.Code != 200 {
 		t.Errorf("healthz: got %d want 200", w.Code)
 	}
+	// The contract smoke test asserts the healthz body contains "ok".
+	if !strings.Contains(w.Body.String(), "ok") {
+		t.Errorf("healthz body: got %q, want it to contain \"ok\"", w.Body.String())
+	}
 }
 
 func TestReadyz(t *testing.T) {

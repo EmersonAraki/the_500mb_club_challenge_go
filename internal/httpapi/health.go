@@ -1,10 +1,15 @@
 package httpapi
 
-import "net/http"
+import (
+	"io"
+	"net/http"
+)
 
-// healthz reports process liveness without touching storage.
+// healthz reports process liveness without touching storage. The body is "ok"
+// (the contract smoke test asserts the body contains it).
 func (h *Handler) healthz(w http.ResponseWriter, _ *http.Request) {
-	status(w, http.StatusOK)
+	w.WriteHeader(http.StatusOK)
+	io.WriteString(w, "ok")
 }
 
 // readyz reports readiness, contingent on storage being reachable.
