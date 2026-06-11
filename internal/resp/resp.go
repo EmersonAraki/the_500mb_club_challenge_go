@@ -98,6 +98,102 @@ func readBulk(r *bufio.Reader, line []byte) (any, error) {
 	return buf[:n], nil
 }
 
+// ReadFixedBulkArray reads an array reply whose members are each exactly `size`
+// bytes into a single backing buffer, returning it and the member count; member
+// i is backing[i*size:(i+1)*size]. This is the hot read path: it allocates one
+// backing for the whole array instead of one buffer per member, and skips the
+// per-member interface boxing the generic ReadReply incurs. An error reply ('-')
+// surfaces as an error; a null or empty array returns (nil, 0, nil); any member
+// whose declared length is not `size` is an error.
+func ReadFixedBulkArray(r *bufio.Reader, size int) ([]byte, int, error) {
+	prefix, err := r.ReadByte()
+	if err != nil {
+		return nil, 0, err
+	}
+	if prefix == '-' {
+		line, err := readLine(r)
+		if err != nil {
+			return nil, 0, err
+		}
+		return nil, 0, &Error{Msg: string(line)}
+	}
+	if prefix != '*' {
+		return nil, 0, errors.New("resp: expected array reply")
+	}
+	n, err := parseIntLine(r)
+	if err != nil {
+		return nil, 0, err
+	}
+	if n <= 0 {
+		return nil, 0, nil
+	}
+	backing := make([]byte, int(n)*size)
+	for i := int64(0); i < n; i++ {
+		bp, err := r.ReadByte()
+		if err != nil {
+			return nil, 0, err
+		}
+		if bp != '$' {
+			return nil, 0, errors.New("resp: expected bulk member in array")
+		}
+		// parseIntLine avoids the per-line allocation that readLine's ReadBytes
+		// incurs -- the dominant cost when reading a large member array.
+		ln, err := parseIntLine(r)
+		if err != nil {
+			return nil, 0, err
+		}
+		if ln != int64(size) {
+			return nil, 0, errors.New("resp: unexpected member size")
+		}
+		if _, err := io.ReadFull(r, backing[i*int64(size):(i+1)*int64(size)]); err != nil {
+			return nil, 0, err
+		}
+		// Skip the member's trailing CRLF without allocating (Discard avoids the
+		// stack-array-to-slice escape that io.ReadFull on a local buffer causes).
+		if _, err := r.Discard(2); err != nil {
+			return nil, 0, err
+		}
+	}
+	return backing, int(n), nil
+}
+
+// parseIntLine reads a decimal integer (optional leading '-') terminated by CRLF
+// directly off the reader, allocating nothing. Used on the hot member-read path.
+func parseIntLine(r *bufio.Reader) (int64, error) {
+	var n int64
+	neg, seen := false, false
+	for {
+		c, err := r.ReadByte()
+		if err != nil {
+			return 0, err
+		}
+		switch {
+		case c == '\r':
+			nl, err := r.ReadByte()
+			if err != nil {
+				return 0, err
+			}
+			if nl != '\n' {
+				return 0, errors.New("resp: malformed line terminator")
+			}
+			if !seen {
+				return 0, errors.New("resp: empty integer")
+			}
+			if neg {
+				n = -n
+			}
+			return n, nil
+		case c == '-' && !seen && !neg:
+			neg = true
+		case c >= '0' && c <= '9':
+			n = n*10 + int64(c-'0')
+			seen = true
+		default:
+			return 0, errors.New("resp: invalid integer")
+		}
+	}
+}
+
 // readLine reads up to and including CRLF, returning the content without CRLF.
 func readLine(r *bufio.Reader) ([]byte, error) {
 	line, err := r.ReadBytes('\n')

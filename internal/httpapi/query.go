@@ -10,13 +10,6 @@ const (
 	maxLimit     = 500
 )
 
-// rangeOut is the response for a time-window query. next_cursor is always
-// present, null when there is no further page.
-type rangeOut struct {
-	Points     []pointOut `json:"points"`
-	NextCursor *string    `json:"next_cursor"`
-}
-
 // query handles GET /devices/{id}/telemetry.
 func (h *Handler) query(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -47,11 +40,12 @@ func (h *Handler) query(w http.ResponseWriter, r *http.Request) {
 		status(w, http.StatusBadRequest)
 		return
 	}
-	out := rangeOut{Points: toOuts(pts)}
-	if next != "" {
-		out.NextCursor = &next
-	}
-	writeJSON(w, http.StatusOK, out)
+	// Encode straight to bytes (reflection-free) and write once. ~96 bytes/point
+	// covers the fixed fields plus battery without regrowing the buffer.
+	buf := appendRangeJSON(make([]byte, 0, len(pts)*96+32), pts, next)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(buf)
 }
 
 func parseInt64(s string) (int64, bool) {

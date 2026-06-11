@@ -118,3 +118,44 @@ func TestEncodeUniquePerSequence(t *testing.T) {
 		t.Error("expected different sequence to yield distinct members")
 	}
 }
+
+func TestEncodeIntoMatchesEncode(t *testing.T) {
+	p, err := ParsePoint(mustJSON(t, validRaw()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dst := make([]byte, EncodedLen)
+	p.EncodeInto(dst, 42)
+	if want := p.Encode(42); string(dst) != string(want) {
+		t.Errorf("EncodeInto produced different bytes than Encode:\n got %x\nwant %x", dst, want)
+	}
+}
+
+func TestEncodeIntoWritesIntoSharedBacking(t *testing.T) {
+	// Two points encoded into adjacent slices of one backing array must each
+	// decode back independently -- this is the batch allocation pattern.
+	a := Point{TS: 1000, Lat: 1, Lon: 2, Ax: 3, Ay: 4, Az: 5, HasBattery: true, Battery: 0.5}
+	b := Point{TS: 2000, Lat: 6, Lon: 7, Ax: 8, Ay: 9, Az: 10}
+	backing := make([]byte, 2*EncodedLen)
+	a.EncodeInto(backing[0:EncodedLen], 1)
+	b.EncodeInto(backing[EncodedLen:2*EncodedLen], 2)
+
+	da, err := Decode(backing[0:EncodedLen])
+	if err != nil || da != a {
+		t.Fatalf("first member: got %+v err %v want %+v", da, err, a)
+	}
+	db, err := Decode(backing[EncodedLen : 2*EncodedLen])
+	if err != nil || db != b {
+		t.Fatalf("second member: got %+v err %v want %+v", db, err, b)
+	}
+}
+
+func TestEncodeIntoRejectsShortBuffer(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("expected EncodeInto to panic on a buffer shorter than EncodedLen")
+		}
+	}()
+	p := Point{TS: 1}
+	p.EncodeInto(make([]byte, EncodedLen-1), 1)
+}

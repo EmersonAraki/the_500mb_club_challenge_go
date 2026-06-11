@@ -165,9 +165,7 @@ func (s *redisStore) Ping(ctx context.Context) error {
 func (s *redisStore) Append(ctx context.Context, id string, pts []model.Point) (int, error) {
 	zadd := make([][]byte, 0, 2+2*len(pts))
 	zadd = append(zadd, []byte("ZADD"), s.key(id))
-	for _, p := range pts {
-		zadd = append(zadd, itoa(p.TS), p.Encode(s.seq.Add(1)))
-	}
+	zadd = encodeMembers(zadd, pts, &s.seq)
 
 	// Amortize the cap: only pipeline the trim every trimEvery writes. Between
 	// trims a device may briefly hold up to cap + trimEvery*batch extra points;
@@ -184,6 +182,20 @@ func (s *redisStore) Append(ctx context.Context, id string, pts []model.Point) (
 	return len(pts), nil
 }
 
+// encodeMembers appends a (score, member) byte pair to args for each point. All
+// members for the batch are encoded into one shared backing array, so a batch of
+// N points costs a single member allocation instead of N. seq supplies the
+// per-member uniqueness counter. The returned slice is args, possibly grown.
+func encodeMembers(args [][]byte, pts []model.Point, seq *atomic.Uint64) [][]byte {
+	backing := make([]byte, model.EncodedLen*len(pts))
+	for i, p := range pts {
+		m := backing[i*model.EncodedLen : (i+1)*model.EncodedLen : (i+1)*model.EncodedLen]
+		p.EncodeInto(m, seq.Add(1))
+		args = append(args, itoa(p.TS), m)
+	}
+	return args
+}
+
 func (s *redisStore) Range(ctx context.Context, id string, from, to int64, limit int, cur string) ([]model.Point, string, error) {
 	curTs, curSkip := from, 0
 	if cur != "" {
@@ -197,11 +209,7 @@ func (s *redisStore) Range(ctx context.Context, id string, from, to int64, limit
 		itoa(curTs), itoa(to),
 		[]byte("LIMIT"), itoa(int64(curSkip)), itoa(int64(limit + 1))}
 
-	replies, err := s.do(ctx, cmd)
-	if err != nil {
-		return nil, "", err
-	}
-	pts, err := decodeMembers(replies[0])
+	pts, err := s.readPoints(ctx, cmd)
 	if err != nil {
 		return nil, "", err
 	}
@@ -211,11 +219,47 @@ func (s *redisStore) Range(ctx context.Context, id string, from, to int64, limit
 
 func (s *redisStore) Recent(ctx context.Context, id string, n int) ([]model.Point, error) {
 	cmd := [][]byte{[]byte("ZREVRANGE"), s.key(id), []byte("0"), itoa(int64(n - 1))}
-	replies, err := s.do(ctx, cmd)
+	return s.readPoints(ctx, cmd) // ZREVRANGE is already most-recent-first
+}
+
+// readPoints runs a single command whose reply is an array of fixed-size binary
+// members, decoding straight to points. It reads all members into one backing
+// buffer (resp.ReadFixedBulkArray) and skips the generic []any reply path, so a
+// query of N points allocates the backing + the points slice rather than ~3N
+// objects. Connection handling mirrors do().
+func (s *redisStore) readPoints(ctx context.Context, cmd [][]byte) ([]model.Point, error) {
+	cn, err := s.get()
 	if err != nil {
 		return nil, err
 	}
-	return decodeMembers(replies[0]) // ZREVRANGE is already most-recent-first
+	if dl, ok := ctx.Deadline(); ok {
+		_ = cn.c.SetDeadline(dl)
+	}
+	if _, err := cn.w.Write(resp.EncodeCommand(cmd)); err != nil {
+		_ = cn.c.Close()
+		return nil, err
+	}
+	if err := cn.w.Flush(); err != nil {
+		_ = cn.c.Close()
+		return nil, err
+	}
+	backing, count, err := resp.ReadFixedBulkArray(cn.r, model.EncodedLen)
+	if err != nil {
+		_ = cn.c.Close()
+		return nil, err
+	}
+	_ = cn.c.SetDeadline(time.Time{})
+	s.put(cn)
+
+	pts := make([]model.Point, count)
+	for i := 0; i < count; i++ {
+		p, err := model.Decode(backing[i*model.EncodedLen : (i+1)*model.EncodedLen])
+		if err != nil {
+			return nil, err
+		}
+		pts[i] = p
+	}
+	return pts, nil
 }
 
 func (s *redisStore) Close() error {
@@ -229,27 +273,7 @@ func (s *redisStore) Close() error {
 	}
 }
 
-func decodeMembers(reply any) ([]model.Point, error) {
-	if reply == nil {
-		return nil, nil
-	}
-	arr, ok := reply.([]any)
-	if !ok {
-		return nil, errors.New("redis: expected array reply")
-	}
-	out := make([]model.Point, 0, len(arr))
-	for _, item := range arr {
-		b, ok := item.([]byte)
-		if !ok {
-			return nil, errors.New("redis: expected bulk member")
-		}
-		p, err := model.Decode(b)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, nil
-}
-
-func itoa(v int64) []byte { return []byte(strconv.FormatInt(v, 10)) }
+// itoa renders v as decimal ASCII in a single allocation. AppendInt writes into
+// the fresh backing directly, avoiding the string->[]byte copy that
+// []byte(strconv.FormatInt(...)) incurs. 20 bytes holds any int64 (incl. sign).
+func itoa(v int64) []byte { return strconv.AppendInt(make([]byte, 0, 20), v, 10) }
