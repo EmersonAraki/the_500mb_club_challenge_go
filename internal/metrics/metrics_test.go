@@ -1,6 +1,8 @@
 package metrics
 
 import (
+	"io"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -44,6 +46,24 @@ func TestCounterVecPerLabel(t *testing.T) {
 	// HELP/TYPE emitted once for the family.
 	if n := strings.Count(out, "# TYPE pibench_http_requests_total counter"); n != 1 {
 		t.Errorf("TYPE emitted %d times, want 1", n)
+	}
+}
+
+func TestCollectorRendersAtScrapeTime(t *testing.T) {
+	r := New()
+	n := 0
+	r.AddCollector(func(w io.Writer) {
+		n++
+		io.WriteString(w, "# HELP pibench_go_goroutines Current goroutines\n")
+		io.WriteString(w, "# TYPE pibench_go_goroutines gauge\n")
+		io.WriteString(w, "pibench_go_goroutines "+strconv.Itoa(n)+"\n")
+	})
+	// Each scrape re-invokes the collector, so the value reflects scrape time.
+	if got := render(r); !strings.Contains(got, "pibench_go_goroutines 1") {
+		t.Errorf("first scrape missing collector output:\n%s", got)
+	}
+	if got := render(r); !strings.Contains(got, "pibench_go_goroutines 2") {
+		t.Errorf("second scrape did not re-invoke collector:\n%s", got)
 	}
 }
 

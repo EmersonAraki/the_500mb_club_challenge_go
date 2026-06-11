@@ -33,6 +33,9 @@ func main() {
 	}
 
 	reg := metrics.New()
+	// Expose Go runtime GC/scheduler gauges so /metrics can attribute tail
+	// latency to stop-the-world pauses vs. CFS scheduling starvation.
+	reg.AddCollector(metrics.RuntimeCollector)
 	handler := httpapi.New(st, reg, httpapi.Config{
 		InstanceID:     cfg.InstanceID,
 		SingleMaxBytes: cfg.SingleMaxBytes,

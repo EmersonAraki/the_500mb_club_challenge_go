@@ -16,6 +16,16 @@ type Registry struct {
 	mu         sync.RWMutex
 	counters   []*Counter
 	counterVec []*CounterVec
+	collectors []func(io.Writer)
+}
+
+// AddCollector registers a function invoked on every scrape, after the
+// counters, to emit exposition lines for values sampled at render time (e.g.
+// runtime gauges). The collector is responsible for its own HELP/TYPE lines.
+func (r *Registry) AddCollector(c func(io.Writer)) {
+	r.mu.Lock()
+	r.collectors = append(r.collectors, c)
+	r.mu.Unlock()
 }
 
 // New returns an empty Registry.
@@ -88,6 +98,7 @@ func (r *Registry) Render(w io.Writer) {
 	r.mu.RLock()
 	counters := append([]*Counter(nil), r.counters...)
 	vecs := append([]*CounterVec(nil), r.counterVec...)
+	collectors := append([]func(io.Writer){}, r.collectors...)
 	r.mu.RUnlock()
 
 	for _, c := range counters {
@@ -107,6 +118,9 @@ func (r *Registry) Render(w io.Writer) {
 				strconv.FormatInt(cv.series[k].v.Load(), 10)+"\n")
 		}
 		cv.mu.RUnlock()
+	}
+	for _, c := range collectors {
+		c(w)
 	}
 }
 
