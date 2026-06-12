@@ -20,7 +20,7 @@ client ─▶│  nginx LB  │  strict round-robin (no adaptive heuristics)
      ┌────────┼────────┐
      ▼        ▼        ▼
   ┌──────┐ ┌──────┐ ┌──────┐
-  │ api1 │ │ api2 │ │ api3 │   Go, scratch image (~5.7 MB)
+  │ api1 │ │ api2 │ │ api3 │   Go, scratch image
   └──┬───┘ └──┬───┘ └──┬───┘
      └────────┼────────┘
               ▼
@@ -29,100 +29,59 @@ client ─▶│  nginx LB  │  strict round-robin (no adaptive heuristics)
           └───────┘
 ```
 
-Container limits sum to exactly **2.00 CPU / 488 MB**, inside the ceiling
+Container limits sum within the **2 CPU / 500 MB** ceiling
 (see [`docker-compose.yml`](./docker-compose.yml)):
 
 | Component | CPU | Memory |
 |---|---:|---:|
-| nginx LB | 0.35 | 32 MB |
-| api ×3 | 0.45 each (1.35) | 120 MB each (360 MB) |
-| redis | 0.30 | 96 MB |
-| **total** | **2.00** | **488 MB** |
+| nginx LB | 0.48 | 32 MB |
+| api ×3 | 0.37 each (1.11) | 120 MB each (360 MB) |
+| redis | 0.40 | 96 MB |
+| **total** | **1.99** | **488 MB** |
 
-## Design choices and why they score well
+The split deliberately favors the two **shared funnels** — the single nginx and
+the single Redis, through which all traffic passes — over the three API instances,
+which parallelize and have the most headroom. Both are single-threaded, so
+starving either collapses throughput for everyone.
 
-The score weights five dimensions; efficiency (32%) and capacity (27%) together
-decide **59%** of the race. Every choice below optimizes for those two:
+## Key design decisions
 
-- **Go on `scratch`.** A tiny static binary (~5.7 MB image) with low, predictable
-  RSS and no runtime to host. Saturates the latency / resilience / stability
-  targets while leading on efficiency and capacity.
+- **Go on a `scratch` image, zero third-party dependencies.** The Redis client,
+  RESP2 codec, and Prometheus exposition are all hand-rolled on the standard
+  library and shipped as a single static binary on `scratch`. The result is a tiny
+  image, low and predictable RSS, no runtime to host, and no supply chain.
 - **Redis, one sorted set per device** (`t:{id}`, score = `ts`, member =
-  binary-encoded point). Natively handles out-of-order ingestion, time-window
-  range queries, and the "last 256 points" needed for anomaly detection.
+  binary-encoded point). A sorted set natively handles out-of-order ingestion,
+  time-window range queries, and the "last 256 points" the anomaly check needs.
+- **Fixed 65-byte binary member, not JSON.** Each point is encoded into a
+  fixed-width binary member — a big-endian `ts` + atomic `seq` prefix (stable tie
+  ordering and uniqueness) followed by the float fields. Storing binary instead of
+  JSON keeps the hot path allocation-light and the stored size small.
 - **Bounded memory under sustained ingestion.** Each device's history is capped to
-  the newest `DEVICE_CAP` points (default 1024) via `ZREMRANGEBYRANK`, with a Redis
-  `maxmemory` + `allkeys-lru` safety net. The trim is **amortized** — issued ~once
-  per 16 writes, not every write. Redis is single-threaded, so halving the
-  write-path command count directly raises sustainable RPS. Memory never grows
-  without bound, which is decisive for efficiency.
-- **Low GC pressure on the hot path.** Points are stored as a fixed 65-byte binary
-  member (not JSON), validation is allocation-light, and metrics are atomic
-  counters only (no per-request histograms). Strict round-robin punishes GC pauses,
-  so keeping them small protects tail latency.
-- **No third-party dependencies.** The Redis client, RESP2 codec, and Prometheus
-  exposition are hand-rolled on the standard library. Smaller binary, smaller
-  image, lower RSS, no supply chain.
-
-## Benchmark
-
-Run with the challenge's own harness — the k6 `steady` scenario (`test/test.js`)
-and `capture-stats.sh` from [the challenge
-repo](https://github.com/araki/the_500mb_club_challenge) — against the full
-`docker compose` stack through the nginx load balancer. The steady scenario is a
-`constant-arrival-rate` of **100 RPS for 1 minute** over **50 pre-seeded devices**,
-with the realistic operation mix **60% single ingest / 10% batch / 20% range query
-/ 10% anomaly**. Targets below are the scoring profile from
-[`scoring.md`](./scoring.md).
-
-> **Environment caveat.** These runs were on **Docker Desktop / macOS / Apple
-> Silicon (ARM64)**, *not* the Raspberry Pi 5 target, and at the `test.js` rate of
-> 100 RPS (the Pi harness gates efficiency at ~200 RPS). Container CPU and memory
-> limits are enforced identically (2.00 CPU / 488 MB aggregate), so the figures
-> validate correctness, the zero-error gate, latency under the SLOs, and footprint
-> under the budget — but absolute throughput on a Pi 5 will be lower, and the
-> capacity / spike / endurance scenarios run only on the Pi-Bench daemon.
-
-### Latency (k6 steady, per operation)
-
-| Operation | p95 | p99 | p99.9 | p99 target | Result |
-|---|---:|---:|---:|---:|:--|
-| `post` single ingest | 1.90 ms | 2.39 ms | 5.46 ms | 8 ms | ✅ 3.3× under |
-| `batch` ingest | 4.38 ms | 5.56 ms | 23.4 ms | 25 ms | ✅ 4.5× under |
-| `range` query | 2.61 ms | 3.00 ms | 3.73 ms | 15 ms | ✅ 5.0× under |
-| `anomaly` z-score | 2.23 ms | 2.99 ms | 4.44 ms | 25 ms | ✅ 8.4× under |
-
-- **`http_req_failed`: 0.00%** (0 / 6,050 requests) — clears the gate's < 0.5%
-  error budget.
-- Every operation sits well inside its "excellent" p99 SLO; the contract
-  [`smoke.js`](https://github.com/araki/the_500mb_club_challenge) passed all 45
-  assertions first.
-
-### Efficiency / footprint (measured during the steady run)
-
-| Metric | Observed | Target / budget | Result |
-|---|---:|---:|:--|
-| Aggregate RSS (p95) | **46.6 MiB** | 50–500 MB band; budget 500 MB | ✅ below the 50 MB top-clip floor |
-| Aggregate CPU (mean) | **8.2%** | 40% (half the 2-core ceiling) | ✅ ~1/5 of target |
-| API image size | **~5.7 MB** | — (informational) | scratch, single static binary |
-| Cold start (`up` → stable `/readyz`) | **7.65 s** | — (informational) | — |
-
-The aggregate is the sum across all five containers (3× api + nginx + redis). At
-steady load the whole stack uses **under 10% of its memory budget** and **~4% of
-its CPU budget** — the efficiency dimension (32% of the score) is where this
-submission is built to win.
-
-### Reproduce
-
-```bash
-# from this repo
-docker compose -p bench up --build -d
-
-# from a clone of the challenge repo (k6 + capture-stats.sh live there)
-k6 run --env BASE_URL=http://localhost:8080 test/smoke.js   # contract check
-scripts/capture-stats.sh -p bench -d 75 -o steady-stats.csv &
-k6 run --env BASE_URL=http://localhost:8080 test/test.js    # steady 100 RPS, 1m
-```
+  the newest `DEVICE_CAP` points (default 1024) via `ZREMRANGEBYRANK`, backed by a
+  Redis `maxmemory` + `allkeys-lru` safety net. The trim is **amortized** — issued
+  ~once per 16 writes, not on every write. Redis is single-threaded, so halving the
+  write-path command count directly raises sustainable throughput, and memory never
+  grows without bound.
+- **Synchronous writes — a `202` means persisted.** Ingestion writes straight to
+  Redis before returning `202`; a Redis failure surfaces as a `503`, never as
+  silent data loss. There is no async buffer or coalescing layer, so no
+  read-after-write race and no drop-on-overflow window.
+- **Fail-fast reads.** Every read wraps its store call in a per-request deadline
+  (`READ_TIMEOUT_MS`, default 250 ms): a stalled Redis becomes an immediate `503`
+  plus a counter, instead of holding a goroutine and the load-balancer connection
+  for the full server write timeout — which under strict round-robin would poison
+  every instance's tail.
+- **Strict round-robin load balancing.** The nginx LB uses fixed round-robin with
+  no adaptive heuristics, by design: it exposes per-instance tail-latency variance
+  (e.g. a GC pause on one API) rather than hiding it behind least-conn balancing.
+- **One `P` per instance (`GOMAXPROCS=1`).** Each API is pinned to a single
+  scheduler thread to match its sub-core CPU quota, avoiding the goroutine-migration
+  and GC-assist jitter of an oversubscribed runtime under a fractional-core limit.
+- **Low GC pressure on the hot path.** Binary members (not JSON), allocation-light
+  validation, and atomic-counter metrics (no per-request histograms) keep
+  stop-the-world pauses small — which strict round-robin would otherwise surface
+  directly in tail latency.
 
 ## Endpoints
 
@@ -173,7 +132,7 @@ go test -tags=integration ./internal/store/    # against a real Redis (REDIS_ADD
 
 The in-memory store mirrors the Redis ZSET semantics, so handler behavior is
 covered without a broker; the `integration`-tagged tests exercise the real Redis
-client. The live stack was also smoke-tested end-to-end through the load balancer.
+client.
 
 ## Configuration
 
@@ -186,7 +145,7 @@ client. The live stack was also smoke-tested end-to-end through the load balance
 | `READ_TIMEOUT_MS` | `250` | per-request Redis deadline on read paths; a stall becomes a fast `503` plus `pibench_redis_read_timeout_total`, not a held goroutine |
 | `REDIS_POOL` | `64` | connection pool size; pre-warmed at startup so the request path never pays a TCP handshake |
 | `GOMEMLIMIT` | `110MiB` (compose) | Go soft memory limit |
-| `GOMAXPROCS` | `1` (compose) | pinned to the ~0.45-core share to avoid oversubscription jitter |
+| `GOMAXPROCS` | `1` (compose) | one P per instance to avoid oversubscription jitter under the sub-core quota |
 
 ## Layout
 
@@ -201,4 +160,5 @@ internal/metrics     atomic-counter Prometheus exposition
 internal/httpapi     routing, middleware, handlers
 internal/config      env configuration
 deploy/nginx.conf    round-robin load balancer
+stress/              in-process Go load harness (dev only, not shipped)
 ```
