@@ -95,6 +95,20 @@ func TestComputeZeroStddev(t *testing.T) {
 	}
 }
 
+func TestComputeZeroStddevYieldsFiniteFields(t *testing.T) {
+	// Flat data gives stddev 0; an unguarded z = (mag-mean)/0 would be NaN, which
+	// encoding/json refuses to marshal -> a broken 200. Every field must be finite.
+	r, err := Compute(pts(5, 5, 5, 5, 5, 5, 5, 5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, v := range map[string]float64{"z": r.ZScore, "mean": r.Mean, "stddev": r.Stddev} {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			t.Errorf("%s is not finite: %v", name, v)
+		}
+	}
+}
+
 func TestComputeCapsAt256(t *testing.T) {
 	azs := make([]float64, 300)
 	r, err := Compute(pts(azs...))

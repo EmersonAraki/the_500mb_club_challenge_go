@@ -37,27 +37,26 @@ func Compute(points []model.Point) (Result, error) {
 	if len(points) > window {
 		points = points[:window]
 	}
-	n := float64(len(points))
-
-	var sum float64
-	mags := make([]float64, len(points))
+	// Single-pass Welford: running mean + sum-of-squared-deviations (m2), no
+	// intermediate magnitudes slice. Mean and variance are order-independent, so
+	// the newest-first orientation does not matter for them; we capture the newest
+	// magnitude (index 0) separately for the z-score numerator.
+	var mean, m2, newestMag float64
 	for i, p := range points {
-		m := math.Sqrt(p.Ax*p.Ax + p.Ay*p.Ay + p.Az*p.Az)
-		mags[i] = m
-		sum += m
+		mag := math.Sqrt(p.Ax*p.Ax + p.Ay*p.Ay + p.Az*p.Az)
+		if i == 0 {
+			newestMag = mag
+		}
+		delta := mag - mean
+		mean += delta / float64(i+1)
+		m2 += delta * (mag - mean)
 	}
-	mean := sum / n
-
-	var sq float64
-	for _, m := range mags {
-		d := m - mean
-		sq += d * d
-	}
-	stddev := math.Sqrt(sq / n)
+	// Population variance (÷N), per the contract; sample variance (÷N-1) is wrong.
+	stddev := math.Sqrt(m2 / float64(len(points)))
 
 	var z float64
 	if stddev != 0 {
-		z = (mags[0] - mean) / stddev
+		z = (newestMag - mean) / stddev
 	}
 
 	return Result{
