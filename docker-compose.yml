@@ -1,14 +1,10 @@
 # Pi-Bench telemetry stack: load balancer + 3 API instances + Redis.
 #
 # Resource limits sum within the inviolable aggregate ceiling of 2 CPU / 500 MB.
-# The split favors capacity and was tuned empirically with a load sweep
-# (stress/cmd/capacity, under a ÷4 Pi-approximation). Both shared funnels -- the
-# single nginx and single Redis, through which all traffic passes -- get more than
-# an even share; the 3 API instances parallelize and run leanest. At the knee
-# (~3200 RPS, ~3x the ~1000 par) nginx and Redis sit co-equal (~47% of quota each),
-# so the split is already balanced -- a finer rebalance between the two funnels was
-# A/B-tested and made no measurable difference (within run-to-run noise), so this
-# split is kept. Re-tune on the real Pi.
+# CPU favors the two shared funnels -- the single nginx and single Redis, which all
+# traffic crosses and which are single-threaded -- over the 3 API instances, which
+# parallelize and have the most headroom. Starving either funnel caps throughput
+# for the whole stack, so the funnels get the larger share.
 #   redis   0.40 CPU /  96 MB
 #   nginx   0.48 CPU /  32 MB
 #   api x3  0.37 CPU / 120 MB each  (1.11 CPU / 360 MB)
@@ -44,8 +40,8 @@ services:
       REDIS_ADDR: redis:6379
       DEVICE_CAP: "1024"
       GOMEMLIMIT: 110MiB
-      # Pin to the ~0.45-core share: one P avoids the goroutine migration and
-      # GC-assist jitter of an oversubscribed runtime under a sub-core quota.
+      # One P per instance: matches the sub-core quota and avoids the goroutine
+      # migration and GC-assist jitter of an oversubscribed runtime.
       GOMAXPROCS: "1"
     depends_on: [redis]
     cpus: &api-cpus "0.37"
