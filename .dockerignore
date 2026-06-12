@@ -4,4 +4,5 @@
 deploy
 LICENSE
 openapi.yaml
+stress
 **/*_test.go
