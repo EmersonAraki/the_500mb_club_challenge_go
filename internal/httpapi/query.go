@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 )
@@ -34,10 +35,12 @@ func (h *Handler) query(w http.ResponseWriter, r *http.Request) {
 		limit = n
 	}
 
-	pts, next, err := h.store.Range(r.Context(), id, from, to, limit, q.Get("cursor"))
+	ctx, cancel := context.WithTimeout(r.Context(), h.cfg.ReadTimeout)
+	defer cancel()
+	pts, next, err := h.store.Range(ctx, id, from, to, limit, q.Get("cursor"))
 	if err != nil {
-		// An invalid cursor is the only user-driven error surfaced here.
-		status(w, http.StatusBadRequest)
+		// 400 only for a bad cursor; a stalled/unreachable Redis is a 503.
+		status(w, h.readStatus(err))
 		return
 	}
 	// Encode straight to bytes (reflection-free) and write once. ~96 bytes/point

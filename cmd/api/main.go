@@ -40,6 +40,7 @@ func main() {
 		InstanceID:     cfg.InstanceID,
 		SingleMaxBytes: cfg.SingleMaxBytes,
 		BatchMaxBytes:  cfg.BatchMaxBytes,
+		ReadTimeout:    cfg.ReadTimeout,
 	})
 
 	srv := &http.Server{

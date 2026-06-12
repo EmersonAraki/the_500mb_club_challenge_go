@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"io"
 	"net/http"
 )
@@ -12,9 +13,13 @@ func (h *Handler) healthz(w http.ResponseWriter, _ *http.Request) {
 	io.WriteString(w, "ok")
 }
 
-// readyz reports readiness, contingent on storage being reachable.
+// readyz reports readiness, contingent on storage being reachable. The store
+// ping is bounded by the read deadline so a stalled Redis fails the probe fast
+// instead of hanging the LB's readiness check.
 func (h *Handler) readyz(w http.ResponseWriter, r *http.Request) {
-	if err := h.store.Ping(r.Context()); err != nil {
+	ctx, cancel := context.WithTimeout(r.Context(), h.cfg.ReadTimeout)
+	defer cancel()
+	if err := h.store.Ping(ctx); err != nil {
 		status(w, http.StatusServiceUnavailable)
 		return
 	}

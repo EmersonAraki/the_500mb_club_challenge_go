@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLoadDefaults(t *testing.T) {
 	c := Load(func(string) string { return "" })
@@ -13,8 +16,23 @@ func TestLoadDefaults(t *testing.T) {
 	if c.DeviceCap != 1024 {
 		t.Errorf("DeviceCap default: got %d", c.DeviceCap)
 	}
+	if c.ReadTimeout != 250*time.Millisecond {
+		t.Errorf("ReadTimeout default: got %v want 250ms", c.ReadTimeout)
+	}
 	if c.InstanceID == "" {
 		t.Error("InstanceID should fall back to a non-empty value")
+	}
+}
+
+func TestLoadReadTimeoutOverride(t *testing.T) {
+	c := Load(func(k string) string {
+		if k == "READ_TIMEOUT_MS" {
+			return "100"
+		}
+		return ""
+	})
+	if c.ReadTimeout != 100*time.Millisecond {
+		t.Errorf("ReadTimeout override: got %v want 100ms", c.ReadTimeout)
 	}
 }
 

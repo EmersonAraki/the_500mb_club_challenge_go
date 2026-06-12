@@ -17,19 +17,25 @@ type Config struct {
 	DeviceCap       int
 	SingleMaxBytes  int64
 	BatchMaxBytes   int64
+	ReadTimeout     time.Duration
 	ShutdownTimeout time.Duration
 }
 
 // Load resolves configuration using getenv (injected for testability).
 func Load(getenv func(string) string) Config {
 	c := Config{
-		Addr:            str(getenv, "LISTEN_ADDR", ":8080"),
-		RedisAddr:       str(getenv, "REDIS_ADDR", "127.0.0.1:6379"),
-		InstanceID:      getenv("INSTANCE_ID"),
-		PoolSize:        intVal(getenv, "REDIS_POOL", 64),
-		DeviceCap:       intVal(getenv, "DEVICE_CAP", 1024),
-		SingleMaxBytes:  int64(intVal(getenv, "SINGLE_MAX_BYTES", 4096)),
-		BatchMaxBytes:   int64(intVal(getenv, "BATCH_MAX_BYTES", 131072)),
+		Addr:           str(getenv, "LISTEN_ADDR", ":8080"),
+		RedisAddr:      str(getenv, "REDIS_ADDR", "127.0.0.1:6379"),
+		InstanceID:     getenv("INSTANCE_ID"),
+		PoolSize:       intVal(getenv, "REDIS_POOL", 64),
+		DeviceCap:      intVal(getenv, "DEVICE_CAP", 1024),
+		SingleMaxBytes: int64(intVal(getenv, "SINGLE_MAX_BYTES", 4096)),
+		BatchMaxBytes:  int64(intVal(getenv, "BATCH_MAX_BYTES", 131072)),
+		// Per-request Redis read deadline: turns a stalled Redis into a fast 503
+		// instead of holding a goroutine + the LB connection for the full
+		// WriteTimeout. 250ms is ~80x our measured read p99, so false positives
+		// are negligible; tune on the Pi via READ_TIMEOUT_MS.
+		ReadTimeout:     time.Duration(intVal(getenv, "READ_TIMEOUT_MS", 250)) * time.Millisecond,
 		ShutdownTimeout: 10 * time.Second,
 	}
 	if c.InstanceID == "" {

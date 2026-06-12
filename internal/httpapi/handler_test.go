@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/araki/pibench/internal/metrics"
 	"github.com/araki/pibench/internal/store"
@@ -14,7 +15,7 @@ import (
 
 func newTestHandler(t *testing.T) http.Handler {
 	t.Helper()
-	cfg := Config{InstanceID: "inst-1", SingleMaxBytes: 4096, BatchMaxBytes: 131072}
+	cfg := Config{InstanceID: "inst-1", SingleMaxBytes: 4096, BatchMaxBytes: 131072, ReadTimeout: 250 * time.Millisecond}
 	return New(store.NewMem(1000), metrics.New(), cfg)
 }
 

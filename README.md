@@ -131,8 +131,8 @@ full contract.
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/healthz` | liveness, no storage access |
-| GET | `/readyz` | 200 when Redis reachable, else 503 |
+| GET | `/healthz` | liveness, no storage access (answered locally by the LB) |
+| GET | `/readyz` | 200 when Redis reachable within the read deadline, else 503 |
 | GET | `/metrics` | Prometheus text exposition |
 | POST | `/devices/{id}/telemetry` | single ingest → 202 |
 | POST | `/devices/{id}/telemetry/batch` | 1–100 points → 202 `{accepted}` |
@@ -183,6 +183,7 @@ client. The live stack was also smoke-tested end-to-end through the load balance
 | `REDIS_ADDR` | `127.0.0.1:6379` | Redis endpoint |
 | `INSTANCE_ID` | hostname | reported in `X-Instance-Id` |
 | `DEVICE_CAP` | `1024` | points retained per device |
+| `READ_TIMEOUT_MS` | `250` | per-request Redis deadline on read paths; a stall becomes a fast `503` plus `pibench_redis_read_timeout_total`, not a held goroutine |
 | `REDIS_POOL` | `64` | connection pool size; pre-warmed at startup so the request path never pays a TCP handshake |
 | `GOMEMLIMIT` | `110MiB` (compose) | Go soft memory limit |
 | `GOMAXPROCS` | `1` (compose) | pinned to the ~0.45-core share to avoid oversubscription jitter |

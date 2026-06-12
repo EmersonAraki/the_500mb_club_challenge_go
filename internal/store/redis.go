@@ -88,7 +88,7 @@ func (s *redisStore) do(ctx context.Context, cmds ...[][]byte) ([]any, error) {
 	replies, err := cn.roundtrip(cmds)
 	if err != nil {
 		_ = cn.c.Close()
-		return nil, err
+		return nil, ctxOr(ctx, err)
 	}
 	_ = cn.c.SetDeadline(time.Time{})
 	s.put(cn)
@@ -237,16 +237,16 @@ func (s *redisStore) readPoints(ctx context.Context, cmd [][]byte) ([]model.Poin
 	}
 	if _, err := cn.w.Write(resp.EncodeCommand(cmd)); err != nil {
 		_ = cn.c.Close()
-		return nil, err
+		return nil, ctxOr(ctx, err)
 	}
 	if err := cn.w.Flush(); err != nil {
 		_ = cn.c.Close()
-		return nil, err
+		return nil, ctxOr(ctx, err)
 	}
 	backing, count, err := resp.ReadFixedBulkArray(cn.r, model.EncodedLen)
 	if err != nil {
 		_ = cn.c.Close()
-		return nil, err
+		return nil, ctxOr(ctx, err)
 	}
 	_ = cn.c.SetDeadline(time.Time{})
 	s.put(cn)
@@ -271,6 +271,16 @@ func (s *redisStore) Close() error {
 			return nil
 		}
 	}
+}
+
+// ctxOr prefers the context's error over a transport error when the context is
+// done. A hit SetDeadline surfaces as an opaque net timeout; returning ctx.Err()
+// lets callers errors.Is(err, context.DeadlineExceeded) to fail fast with a 503.
+func ctxOr(ctx context.Context, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return ctxErr
+	}
+	return err
 }
 
 // itoa renders v as decimal ASCII in a single allocation. AppendInt writes into

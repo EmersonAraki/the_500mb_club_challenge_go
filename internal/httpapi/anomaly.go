@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
@@ -24,9 +25,11 @@ func (h *Handler) anomaly(w http.ResponseWriter, r *http.Request) {
 		status(w, http.StatusBadRequest)
 		return
 	}
-	pts, err := h.store.Recent(r.Context(), id, 256)
+	ctx, cancel := context.WithTimeout(r.Context(), h.cfg.ReadTimeout)
+	defer cancel()
+	pts, err := h.store.Recent(ctx, id, 256)
 	if err != nil {
-		status(w, http.StatusServiceUnavailable)
+		status(w, h.readStatus(err))
 		return
 	}
 	res, err := anomaly.Compute(pts)
