@@ -1,23 +1,26 @@
 # Pi-Bench telemetry stack (implementation branch): pulls the published image.
 #
-# Security-hardened to satisfy the PR Security Gate, set explicitly rather than
-# relying on the gate's auto-injection so the validated compose matches what we
-# tested: read-only rootfs, dropped caps, no-new-privileges, non-root APIs.
+# Security-hardened: read-only rootfs, dropped capabilities, no-new-privileges,
+# non-root APIs -- set explicitly so the compose is self-contained.
 #
-# Resource limits sum within the inviolable aggregate ceiling of 2 CPU / 500 MB:
-#   redis   0.30 CPU /  96 MB
-#   nginx   0.35 CPU /  32 MB
-#   api x3  0.45 CPU / 120 MB each  (1.35 CPU / 360 MB)
-#   total   2.00 CPU / 488 MB
+# Resource limits sum within the inviolable aggregate ceiling of 2 CPU / 500 MB.
+# CPU favors the two shared funnels -- the single nginx and single Redis, which all
+# traffic crosses and which are single-threaded -- over the 3 API instances, which
+# parallelize and have the most headroom. Starving either funnel caps throughput
+# for the whole stack, so the funnels get the larger share.
+#   redis   0.40 CPU /  96 MB
+#   nginx   0.48 CPU /  32 MB
+#   api x3  0.37 CPU / 120 MB each  (1.11 CPU / 360 MB)
+#   total   1.99 CPU / 488 MB
 
 x-api: &api
-  image: ghcr.io/emersonaraki/500mb-club-challenge:1.0.0
+  image: ghcr.io/emersonaraki/the_500mb_club_challenge_go:1.1.0
   environment:
     REDIS_ADDR: redis:6379
     DEVICE_CAP: "1024"
     GOMEMLIMIT: 110MiB
-    # Pin to the ~0.45-core share: one P avoids the goroutine migration and
-    # GC-assist jitter of an oversubscribed runtime under a sub-core quota.
+    # One P per instance: matches the sub-core quota and avoids the goroutine
+    # migration and GC-assist jitter of an oversubscribed runtime.
     GOMAXPROCS: "1"
   user: "65534:65534"
   read_only: true
@@ -31,12 +34,12 @@ x-api: &api
   # enforced by `docker compose up` on any Compose version (deploy.resources was
   # historically swarm-only). The validator reads the top-level form with
   # precedence over deploy.resources, so this does not double-count.
-  cpus: "0.45"
+  cpus: "0.37"
   mem_limit: 120M
   deploy:
     resources:
       limits:
-        cpus: "0.45"
+        cpus: "0.37"
         memory: 120M
   restart: unless-stopped
 
@@ -48,12 +51,12 @@ services:
     read_only: true
     security_opt:
       - no-new-privileges:true
-    cpus: "0.30"
+    cpus: "0.40"
     mem_limit: 96M
     deploy:
       resources:
         limits:
-          cpus: "0.30"
+          cpus: "0.40"
           memory: 96M
     restart: unless-stopped
 
@@ -83,11 +86,11 @@ services:
     ports:
       - "8080:8080"
     depends_on: [api1, api2, api3]
-    cpus: "0.35"
+    cpus: "0.48"
     mem_limit: 32M
     deploy:
       resources:
         limits:
-          cpus: "0.35"
+          cpus: "0.48"
           memory: 32M
     restart: unless-stopped
