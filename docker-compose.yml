@@ -1,13 +1,18 @@
 # Pi-Bench telemetry stack: load balancer + 3 API instances + Redis.
 #
 # Resource limits sum within the inviolable aggregate ceiling of 2 CPU / 500 MB.
-# The split favors capacity: all traffic funnels through the single nginx, so it
-# gets more cores; Redis (100k+ ops/s per core) is far from saturated at these
-# rates, so it gives some up; the 3 API instances keep the largest share.
-#   redis   0.30 CPU /  96 MB
-#   nginx   0.35 CPU /  32 MB
-#   api x3  0.45 CPU / 120 MB each  (1.35 CPU / 360 MB)
-#   total   2.00 CPU / 488 MB
+# The split favors capacity and was tuned empirically with a load sweep
+# (stress/cmd/capacity, under a ÷4 Pi-approximation). Both shared funnels -- the
+# single nginx and single Redis, through which all traffic passes -- get more than
+# an even share; the 3 API instances parallelize and run leanest. At the knee
+# (~3200 RPS, ~3x the ~1000 par) nginx and Redis sit co-equal (~47% of quota each),
+# so the split is already balanced -- a finer rebalance between the two funnels was
+# A/B-tested and made no measurable difference (within run-to-run noise), so this
+# split is kept. Re-tune on the real Pi.
+#   redis   0.40 CPU /  96 MB
+#   nginx   0.48 CPU /  32 MB
+#   api x3  0.37 CPU / 120 MB each  (1.11 CPU / 360 MB)
+#   total   1.99 CPU / 488 MB
 services:
   redis:
     image: redis:7-alpine
@@ -23,12 +28,12 @@ services:
     # enforced by `docker compose up` on any Compose version (deploy.resources
     # was historically swarm-only). The validator reads the top-level form with
     # precedence over deploy.resources, so this does not double-count.
-    cpus: "0.30"
+    cpus: "0.40"
     mem_limit: 96M
     deploy:
       resources:
         limits:
-          cpus: "0.30"
+          cpus: "0.40"
           memory: 96M
     restart: unless-stopped
 
@@ -43,12 +48,12 @@ services:
       # GC-assist jitter of an oversubscribed runtime under a sub-core quota.
       GOMAXPROCS: "1"
     depends_on: [redis]
-    cpus: &api-cpus "0.45"
+    cpus: &api-cpus "0.37"
     mem_limit: &api-mem 120M
     deploy: &api-deploy
       resources:
         limits:
-          cpus: "0.45"
+          cpus: "0.37"
           memory: 120M
     restart: unless-stopped
 
@@ -79,11 +84,11 @@ services:
     ports:
       - "8080:8080"
     depends_on: [api1, api2, api3]
-    cpus: "0.35"
+    cpus: "0.48"
     mem_limit: 32M
     deploy:
       resources:
         limits:
-          cpus: "0.35"
+          cpus: "0.48"
           memory: 32M
     restart: unless-stopped
